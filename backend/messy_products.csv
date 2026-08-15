@@ -1,0 +1,10 @@
+name,category,price,stock_qty,unit
+Panadol,Medicine,50,100,pcs
+,Medicine,50,100,pcs
+Test Negative,Medicine,-10,5,pcs
+Test Bad Price,Medicine,abc,5,pcs
+Test Bad Stock,Medicine,50,xyz,pcs
+Test Duplicate,Medicine,20,5,pcs
+Test Duplicate,Medicine,25,10,pcs
+Test No Stock,Medicine,30,,pcs
+Test Good,Medicine,40,15,pcs

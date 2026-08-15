@@ -8,9 +8,14 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from app.database import Base
+
 from app.models.business import Business
 from app.models.customer import Customer
 from app.models.product import Product
+from app.models.order import Order
+from app.models.order_item import OrderItem
+from app.models.payment import Payment
+
 
 # this is the Alembic Config object
 config = context.config

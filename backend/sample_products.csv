@@ -1,0 +1,6 @@
+name,category,price,stock_qty,unit
+Panadol,Medicine,50,100,pcs
+Cough Syrup,Medicine,150,50,bottle
+Bandage,Medical Supplies,20,200,pcs
+Vitamin C,Medicine,200,75,box
+Sanitizer,Medical Supplies,100,30,bottle

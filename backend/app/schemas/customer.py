@@ -13,7 +13,6 @@ class CustomerBase(BaseModel):
     @field_validator('phone')
     def validate_phone(cls, v):
         if v is not None:
-            # Allow digits, +, -, spaces, parentheses
             if not re.match(r'^[0-9+\-\s()]+$', v):
                 raise ValueError('Phone number can only contain digits, +, -, spaces, and parentheses')
         return v
@@ -38,6 +37,7 @@ class CustomerUpdate(BaseModel):
 class CustomerOut(CustomerBase):
     id: int
     business_id: int
+    balance_due: float
     created_at: datetime
     
     class Config:

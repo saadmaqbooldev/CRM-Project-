@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import AppShell from "@/components/AppShell";
 import Toast from "@/components/Toast";
@@ -27,6 +28,7 @@ function getErrorMessage(err: any, fallback: string): string {
 }
 
 function CustomersContent() {
+  const router = useRouter();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -240,6 +242,9 @@ function CustomersContent() {
                     Email
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                    Balance
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                     Actions
                   </th>
                 </tr>
@@ -248,9 +253,12 @@ function CustomersContent() {
                 {data?.map((customer) => (
                   <tr key={customer.id} className="hover:bg-gray-50">
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm font-medium text-gray-900">
+                      <button
+                        onClick={() => router.push(`/customers/${customer.id}`)}
+                        className="text-sm font-medium text-blue-600 hover:text-blue-800 hover:underline"
+                      >
                         {customer.name}
-                      </div>
+                      </button>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {customer.phone || "-"}
@@ -258,7 +266,26 @@ function CustomersContent() {
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {customer.email || "-"}
                     </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span
+                        className={`text-sm font-medium ${
+                          customer.balance_due > 0
+                            ? "text-orange-600"
+                            : "text-gray-500"
+                        }`}
+                      >
+                        {customer.balance_due > 0
+                          ? `Rs. ${customer.balance_due.toFixed(2)}`
+                          : "-"}
+                      </span>
+                    </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm space-x-3">
+                      <button
+                        onClick={() => router.push(`/customers/${customer.id}`)}
+                        className="text-blue-600 hover:text-blue-800"
+                      >
+                        Ledger
+                      </button>
                       <button
                         onClick={() => openEditModal(customer)}
                         className="text-blue-600 hover:text-blue-800"

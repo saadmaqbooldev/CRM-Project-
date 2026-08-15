@@ -2,11 +2,13 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import AppShell from "@/components/AppShell";
 import api from "@/lib/api";
 
 function ReportsContent() {
+  const router = useRouter();
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
 
@@ -80,6 +82,12 @@ function ReportsContent() {
       {/* Header */}
       <div className="flex justify-between items-center">
         <h1 className="text-2xl font-bold text-gray-900">Reports</h1>
+        <button
+          onClick={() => router.push("/reports/outstanding")}
+          className="px-4 py-2 bg-orange-600 text-white rounded-md hover:bg-orange-700"
+        >
+          💰 Outstanding Balances
+        </button>
       </div>
 
       {/* Sales Report */}

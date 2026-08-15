@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Float
 from sqlalchemy.sql import func
 from app.database import Base
 
@@ -12,4 +12,5 @@ class Customer(Base):
     email = Column(String(100), nullable=True)
     address = Column(Text, nullable=True)
     notes = Column(Text, nullable=True)
+    balance_due = Column(Float, nullable=False, default=0.0)
     created_at = Column(DateTime, server_default=func.now())

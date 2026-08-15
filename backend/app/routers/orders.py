@@ -25,6 +25,7 @@ def serialize_order(order: Order) -> dict:
         "customer_name": order.customer.name if order.customer else None,
         "receipt_no": order.receipt_no,
         "status": order.status,
+        "payment_type": order.payment_type,
         "total_amount": order.total_amount,
         "notes": order.notes,
         "created_at": order.created_at,
@@ -43,12 +44,7 @@ def serialize_order(order: Order) -> dict:
     
     return order_dict
 
-def process_order_items(
-    items: List,
-    db: Session,
-    current_business: Business
-) -> tuple:
-    """Validate products, calculate total, deduct stock. Returns (total, order_items_list)"""
+def process_order_items(items, db, current_business):
     total_amount = 0.0
     order_items = []
     
@@ -59,16 +55,10 @@ def process_order_items(
         ).first()
         
         if not product:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Product {item.product_id} not found"
-            )
+            raise HTTPException(status_code=404, detail=f"Product {item.product_id} not found")
         
         if product.stock_qty < item.quantity:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Insufficient stock for product: {product.name}. Available: {product.stock_qty}"
-            )
+            raise HTTPException(status_code=400, detail=f"Insufficient stock for {product.name}")
         
         unit_price = product.price
         total_amount += unit_price * item.quantity
@@ -82,20 +72,12 @@ def process_order_items(
     
     return total_amount, order_items
 
-def save_order(
-    db: Session,
-    current_business: Business,
-    customer_id: Optional[int],
-    total_amount: float,
-    notes: Optional[str],
-    order_status: str,
-    order_items: List
-) -> Order:
-    """Save order and items to database"""
+def save_order(db, current_business, customer_id, total_amount, notes, order_status, payment_type, order_items):
     db_order = Order(
         business_id=current_business.id,
         customer_id=customer_id,
         status=order_status,
+        payment_type=payment_type,
         total_amount=total_amount,
         notes=notes
     )
@@ -113,6 +95,12 @@ def save_order(
         )
         db.add(db_order_item)
     
+    # If credit sale, increase customer balance_due
+    if payment_type == "credit":
+        customer = db.query(Customer).filter(Customer.id == customer_id).first()
+        if customer:
+            customer.balance_due += total_amount
+    
     db.commit()
     db.refresh(db_order)
     return db_order
@@ -123,15 +111,10 @@ def create_quick_sale(
     db: Session = Depends(get_db),
     current_business: Business = Depends(get_current_business)
 ):
-    """Create a quick sale — instantly completed (for walk-in retail/medical sales)"""
-    
     customer_id = sale_data.customer_id
     
-    # If no customer_id provided, create a walk-in customer
     if not customer_id:
         walk_in_name = sale_data.customer_name or "Walk-in Customer"
-        
-        # Check if walk-in customer already exists
         walk_in = db.query(Customer).filter(
             Customer.business_id == current_business.id,
             Customer.name == walk_in_name
@@ -149,25 +132,16 @@ def create_quick_sale(
             db.flush()
             customer_id = walk_in.id
     
-    # Validate customer belongs to business
     customer = db.query(Customer).filter(
         Customer.id == customer_id,
         Customer.business_id == current_business.id
     ).first()
     
     if not customer:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Customer not found"
-        )
+        raise HTTPException(status_code=404, detail="Customer not found")
     
     try:
-        # Process items and deduct stock
-        total_amount, order_items = process_order_items(
-            sale_data.items, db, current_business
-        )
-        
-        # Save as completed order
+        total_amount, order_items = process_order_items(sale_data.items, db, current_business)
         db_order = save_order(
             db=db,
             current_business=current_business,
@@ -175,9 +149,9 @@ def create_quick_sale(
             total_amount=total_amount,
             notes=sale_data.notes,
             order_status="completed",
+            payment_type=sale_data.payment_type,
             order_items=order_items
         )
-        
         return serialize_order(db_order)
     
     except HTTPException:
@@ -185,10 +159,7 @@ def create_quick_sale(
         raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create quick sale: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Failed to create quick sale: {str(e)}")
 
 @router.post("/", response_model=OrderOut, status_code=status.HTTP_201_CREATED)
 def create_order(
@@ -196,24 +167,16 @@ def create_order(
     db: Session = Depends(get_db),
     current_business: Business = Depends(get_current_business)
 ):
-    """Create a new order with pending status (for dine-in orders)"""
-    
     customer = db.query(Customer).filter(
         Customer.id == order_data.customer_id,
         Customer.business_id == current_business.id
     ).first()
     
     if not customer:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Customer not found"
-        )
+        raise HTTPException(status_code=404, detail="Customer not found")
     
     try:
-        total_amount, order_items = process_order_items(
-            order_data.items, db, current_business
-        )
-        
+        total_amount, order_items = process_order_items(order_data.items, db, current_business)
         db_order = save_order(
             db=db,
             current_business=current_business,
@@ -221,9 +184,9 @@ def create_order(
             total_amount=total_amount,
             notes=order_data.notes,
             order_status="pending",
+            payment_type=order_data.payment_type,
             order_items=order_items
         )
-        
         return serialize_order(db_order)
     
     except HTTPException:
@@ -231,10 +194,7 @@ def create_order(
         raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create order: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Failed to create order: {str(e)}")
 
 @router.get("/", response_model=List[OrderOut])
 def list_orders(
@@ -309,6 +269,7 @@ def get_order_receipt(
         customer_name=order.customer.name if order.customer else "Walk-in Customer",
         order_date=order.created_at,
         status=order.status,
+        payment_type=order.payment_type,
         items=receipt_items,
         total_amount=order.total_amount,
         notes=order.notes
@@ -338,6 +299,12 @@ def update_order_status(
                 ).first()
                 if product:
                     product.stock_qty += item.quantity
+            
+            # If cancelled credit order, reduce balance_due
+            if order.payment_type == "credit":
+                customer = db.query(Customer).filter(Customer.id == order.customer_id).first()
+                if customer:
+                    customer.balance_due -= order.total_amount
         
         order.status = status_data.status
         db.commit()

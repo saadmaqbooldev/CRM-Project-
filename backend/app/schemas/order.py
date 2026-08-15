@@ -9,12 +9,14 @@ class OrderItemCreate(BaseModel):
 class OrderCreate(BaseModel):
     customer_id: int
     notes: Optional[str] = None
+    payment_type: str = Field(default="cash", pattern="^(cash|credit)$")
     items: List[OrderItemCreate] = Field(..., min_length=1)
 
 class QuickSaleCreate(BaseModel):
-    customer_id: Optional[int] = None  # Optional for walk-in customers
-    customer_name: Optional[str] = None  # Walk-in customer name
+    customer_id: Optional[int] = None
+    customer_name: Optional[str] = None
     notes: Optional[str] = None
+    payment_type: str = Field(default="cash", pattern="^(cash|credit)$")
     items: List[OrderItemCreate] = Field(..., min_length=1)
 
 class OrderItemOut(BaseModel):
@@ -35,6 +37,7 @@ class OrderOut(BaseModel):
     customer_name: Optional[str] = None
     receipt_no: Optional[str] = None
     status: str
+    payment_type: str
     total_amount: float
     notes: Optional[str]
     created_at: datetime
@@ -59,6 +62,7 @@ class ReceiptOut(BaseModel):
     customer_name: str
     order_date: datetime
     status: str
+    payment_type: str
     items: List[ReceiptItem]
     total_amount: float
     notes: Optional[str] = None

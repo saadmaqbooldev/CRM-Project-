@@ -16,13 +16,11 @@ router = APIRouter(prefix="/reports", tags=["reports"])
 
 @router.get("/sales")
 def sales_report(
-    date_from: Optional[date] = Query(None, description="Start date (YYYY-MM-DD)"),
-    date_to: Optional[date] = Query(None, description="End date (YYYY-MM-DD)"),
+    date_from: Optional[date] = Query(None),
+    date_to: Optional[date] = Query(None),
     db: Session = Depends(get_db),
     current_business: Business = Depends(get_current_business)
 ):
-    """Get sales report for date range"""
-    
     query = db.query(
         func.date(Order.created_at).label("date"),
         func.count(Order.id).label("order_count"),
@@ -32,20 +30,13 @@ def sales_report(
         Order.status == "completed"
     )
     
-    # Apply date filters
     if date_from:
         query = query.filter(Order.created_at >= date_from)
-    
     if date_to:
-        date_to_end = date_to + timedelta(days=1)
-        query = query.filter(Order.created_at < date_to_end)
+        query = query.filter(Order.created_at < date_to + timedelta(days=1))
     
-    # Group by date
-    daily_sales = query.group_by(func.date(Order.created_at)).order_by(
-        func.date(Order.created_at)
-    ).all()
+    daily_sales = query.group_by(func.date(Order.created_at)).order_by(func.date(Order.created_at)).all()
     
-    # Calculate totals
     total_revenue = sum(item.revenue for item in daily_sales)
     total_orders = sum(item.order_count for item in daily_sales)
     
@@ -69,8 +60,6 @@ def top_customers_report(
     db: Session = Depends(get_db),
     current_business: Business = Depends(get_current_business)
 ):
-    """Get top customers by revenue"""
-    
     top_customers = db.query(
         Customer.id,
         Customer.name,
@@ -85,10 +74,7 @@ def top_customers_report(
         Order.business_id == current_business.id,
         Order.status == "completed"
     ).group_by(
-        Customer.id,
-        Customer.name,
-        Customer.email,
-        Customer.phone
+        Customer.id, Customer.name, Customer.email, Customer.phone
     ).order_by(
         func.sum(Order.total_amount).desc()
     ).limit(limit).all()
@@ -112,8 +98,6 @@ def top_products_report(
     db: Session = Depends(get_db),
     current_business: Business = Depends(get_current_business)
 ):
-    """Get top products by quantity sold and revenue"""
-    
     top_products = db.query(
         Product.id,
         Product.name,
@@ -129,9 +113,7 @@ def top_products_report(
         Order.business_id == current_business.id,
         Order.status == "completed"
     ).group_by(
-        Product.id,
-        Product.name,
-        Product.category
+        Product.id, Product.name, Product.category
     ).order_by(
         func.sum(OrderItem.quantity).desc()
     ).limit(limit).all()
@@ -147,3 +129,32 @@ def top_products_report(
         })
     
     return result
+
+@router.get("/outstanding-balances")
+def outstanding_balances(
+    db: Session = Depends(get_db),
+    current_business: Business = Depends(get_current_business)
+):
+    """List all customers with balance_due > 0, sorted highest first"""
+    customers = db.query(Customer).filter(
+        Customer.business_id == current_business.id,
+        Customer.balance_due > 0
+    ).order_by(Customer.balance_due.desc()).all()
+    
+    total_outstanding = sum(customer.balance_due for customer in customers)
+    
+    result = []
+    for customer in customers:
+        result.append({
+            "customer_id": customer.id,
+            "name": customer.name,
+            "phone": customer.phone,
+            "email": customer.email,
+            "balance_due": round(customer.balance_due, 2)
+        })
+    
+    return {
+        "total_outstanding": round(total_outstanding, 2),
+        "customer_count": len(result),
+        "customers": result
+    }

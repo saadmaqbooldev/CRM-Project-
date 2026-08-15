@@ -33,9 +33,9 @@ function POSContent() {
   const [selectedCustomer, setSelectedCustomer] = useState<number | null>(null);
   const [customerSearch, setCustomerSearch] = useState("");
   const [showCustomerSelector, setShowCustomerSelector] = useState(false);
+  const [paymentType, setPaymentType] = useState<"cash" | "credit">("cash");
   const [receipt, setReceipt] = useState<Receipt | null>(null);
 
-  // Refetch products when POS page loads
   useEffect(() => {
     queryClient.invalidateQueries({ queryKey: ["pos-products"] });
     queryClient.invalidateQueries({ queryKey: ["products"] });
@@ -71,8 +71,14 @@ function POSContent() {
       queryClient.invalidateQueries({ queryKey: ["products"] });
       queryClient.invalidateQueries({ queryKey: ["orders"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      queryClient.invalidateQueries({ queryKey: ["customers"] });
       
-      setToast({ message: "Sale completed successfully!", type: "success" });
+      setToast({ 
+        message: paymentType === "credit" 
+          ? "Credit sale recorded!" 
+          : "Sale completed successfully!", 
+        type: "success" 
+      });
       
       try {
         const receiptResponse = await api.get(`/orders/${data.id}/receipt`);
@@ -83,6 +89,7 @@ function POSContent() {
       
       setCart([]);
       setSelectedCustomer(null);
+      setPaymentType("cash");
     },
     onError: (err: any) => {
       const detail = err.response?.data?.detail;
@@ -102,6 +109,10 @@ function POSContent() {
   const hasOutOfStockItem = useMemo(() => {
     return cart.some((item) => item.quantity > item.stock_qty);
   }, [cart]);
+
+  const selectedCustomerName = useMemo(() => {
+    return customers?.find((c) => c.id === selectedCustomer)?.name || null;
+  }, [customers, selectedCustomer]);
 
   const addToCart = (product: Product) => {
     if (product.stock_qty <= 0) {
@@ -173,6 +184,7 @@ function POSContent() {
   const clearCart = () => {
     setCart([]);
     setSelectedCustomer(null);
+    setPaymentType("cash");
   };
 
   const handleCheckout = () => {
@@ -186,11 +198,29 @@ function POSContent() {
       return;
     }
 
+    // Credit sale requires a customer
+    if (paymentType === "credit" && !selectedCustomer) {
+      setToast({ 
+        message: "Credit sale requires a customer. Please select a customer.", 
+        type: "error" 
+      });
+      return;
+    }
+
+    // Confirmation for credit sale
+    if (paymentType === "credit" && selectedCustomerName) {
+      const confirmCredit = confirm(
+        `This sale of Rs. ${totalAmount.toFixed(2)} will be added to ${selectedCustomerName}'s balance as credit.\n\nContinue?`
+      );
+      if (!confirmCredit) return;
+    }
+
     const saleData: any = {
       items: cart.map((item) => ({
         product_id: item.product_id,
         quantity: item.quantity,
       })),
+      payment_type: paymentType,
     };
 
     if (selectedCustomer) {
@@ -228,7 +258,7 @@ function POSContent() {
           <div className="bg-white p-4 rounded-lg shadow">
             <input
               type="text"
-              placeholder="Search products..."
+              placeholder="Search items..."
               className="w-full px-4 py-3 border border-gray-300 rounded-md text-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -241,7 +271,7 @@ function POSContent() {
                 <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600"></div>
               </div>
             ) : products && products.length === 0 ? (
-              <p className="text-center text-gray-500 py-8">No products found</p>
+              <p className="text-center text-gray-500 py-8">No items found</p>
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
                 {products?.map((product) => {
@@ -317,15 +347,55 @@ function POSContent() {
             <p className="text-sm text-gray-500">{totalItems} items</p>
           </div>
 
+          {/* Payment Type Toggle */}
+          <div className="p-4 border-b border-gray-200">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Payment Type
+            </label>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setPaymentType("cash")}
+                className={`flex-1 px-4 py-2 rounded-md text-sm font-medium ${
+                  paymentType === "cash"
+                    ? "bg-green-600 text-white"
+                    : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                }`}
+              >
+                💵 Cash
+              </button>
+              <button
+                onClick={() => setPaymentType("credit")}
+                className={`flex-1 px-4 py-2 rounded-md text-sm font-medium ${
+                  paymentType === "credit"
+                    ? "bg-orange-600 text-white"
+                    : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                }`}
+              >
+                📝 Credit
+              </button>
+            </div>
+            {paymentType === "credit" && (
+              <p className="text-xs text-orange-600 mt-2">
+                ⚠️ Credit sale requires a customer selection
+              </p>
+            )}
+          </div>
+
           {/* Customer Selector */}
           <div className="p-4 border-b border-gray-200">
             <button
               onClick={() => setShowCustomerSelector(!showCustomerSelector)}
-              className="w-full flex justify-between items-center px-4 py-2 border border-gray-300 rounded-md hover:bg-gray-50"
+              className={`w-full flex justify-between items-center px-4 py-2 border rounded-md hover:bg-gray-50 ${
+                paymentType === "credit" && !selectedCustomer
+                  ? "border-orange-500 border-2"
+                  : "border-gray-300"
+              }`}
             >
               <span className="text-sm">
                 {selectedCustomer
-                  ? customers?.find((c) => c.id === selectedCustomer)?.name || "Customer Selected"
+                  ? selectedCustomerName || "Customer Selected"
+                  : paymentType === "credit"
+                  ? "⚠️ Select Customer (Required)"
                   : "👤 Walk-in Customer"}
               </span>
               <span className="text-gray-500">▼</span>
@@ -333,15 +403,17 @@ function POSContent() {
 
             {showCustomerSelector && (
               <div className="mt-2 space-y-2">
-                <button
-                  onClick={() => {
-                    setSelectedCustomer(null);
-                    setShowCustomerSelector(false);
-                  }}
-                  className="w-full px-4 py-2 text-left text-sm bg-gray-100 rounded-md hover:bg-gray-200"
-                >
-                  👤 Walk-in Customer (Default)
-                </button>
+                {paymentType === "cash" && (
+                  <button
+                    onClick={() => {
+                      setSelectedCustomer(null);
+                      setShowCustomerSelector(false);
+                    }}
+                    className="w-full px-4 py-2 text-left text-sm bg-gray-100 rounded-md hover:bg-gray-200"
+                  >
+                    👤 Walk-in Customer (Default)
+                  </button>
+                )}
                 <input
                   type="text"
                   placeholder="Search customer..."
@@ -369,11 +441,21 @@ function POSContent() {
             )}
           </div>
 
+          {/* Credit Confirmation Banner */}
+          {paymentType === "credit" && selectedCustomer && selectedCustomerName && (
+            <div className="mx-4 my-3 p-3 bg-orange-50 border border-orange-200 rounded-md">
+              <p className="text-sm text-orange-800">
+                📝 This sale of <strong>Rs. {totalAmount.toFixed(2)}</strong> will be added to{" "}
+                <strong>{selectedCustomerName}</strong>'s balance.
+              </p>
+            </div>
+          )}
+
           {/* Cart Items */}
-          <div className="flex-1 overflow-y-auto max-h-60 p-4 space-y-3">
+          <div className="flex-1 overflow-y-auto max-h-48 p-4 space-y-3">
             {cart.length === 0 ? (
               <p className="text-center text-gray-500 py-8">
-                Tap products to add them
+                Tap items to add them
               </p>
             ) : (
               cart.map((item) => (
@@ -435,11 +517,20 @@ function POSContent() {
               disabled={
                 cart.length === 0 ||
                 hasOutOfStockItem ||
-                quickSaleMutation.isPending
+                quickSaleMutation.isPending ||
+                (paymentType === "credit" && !selectedCustomer)
               }
-              className="w-full px-6 py-3 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 text-lg font-semibold"
+              className={`w-full px-6 py-3 rounded-md disabled:opacity-50 text-lg font-semibold ${
+                paymentType === "credit"
+                  ? "bg-orange-600 text-white hover:bg-orange-700"
+                  : "bg-green-600 text-white hover:bg-green-700"
+              }`}
             >
-              {quickSaleMutation.isPending ? "Processing..." : "Complete Sale"}
+              {quickSaleMutation.isPending
+                ? "Processing..."
+                : paymentType === "credit"
+                ? `Complete Credit Sale`
+                : "Complete Sale"}
             </button>
           </div>
         </div>

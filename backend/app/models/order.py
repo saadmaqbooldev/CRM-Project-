@@ -11,6 +11,7 @@ class Order(Base):
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False)
     receipt_no = Column(String(20), nullable=True)
     status = Column(String(20), nullable=False, default="pending")
+    payment_type = Column(String(10), nullable=False, default="cash")  # cash / credit
     total_amount = Column(Float, nullable=False, default=0.0)
     notes = Column(String(500), nullable=True)
     created_at = Column(DateTime, server_default=func.now())
