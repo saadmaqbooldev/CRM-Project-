@@ -1,0 +1,56 @@
+@import "tailwindcss";
+
+/* ============ RECEIPT PRINT STYLES ============ */
+@media print {
+  /* Hide everything by default */
+  body * {
+    visibility: hidden;
+  }
+
+  /* Show only receipt slip */
+  .receipt-slip,
+  .receipt-slip * {
+    visibility: visible;
+  }
+
+  /* Position receipt at top-left */
+  .receipt-slip {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: 80mm; /* Standard thermal printer width */
+    padding: 5mm;
+    margin: 0;
+    font-family: "Courier New", monospace;
+    font-size: 12px;
+    color: #000;
+    background: #fff;
+  }
+
+  /* Hide all buttons, modals, navbars */
+  button,
+  nav,
+  aside,
+  .sidebar,
+  .topbar,
+  .no-print {
+    display: none !important;
+  }
+
+  /* Clean receipt styling */
+  .receipt-slip h3 {
+    font-size: 16px;
+    font-weight: bold;
+  }
+
+  .receipt-slip .text-xs {
+    font-size: 11px;
+  }
+}
+
+/* ============ SCREEN STYLES ============ */
+.receipt-slip {
+  font-family: "Courier New", monospace;
+  max-width: 80mm;
+  margin: 0 auto;
+}
