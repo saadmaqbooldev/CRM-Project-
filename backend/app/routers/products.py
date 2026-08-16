@@ -21,15 +21,33 @@ LOW_STOCK_THRESHOLD = 5
 def check_low_stock(stock_qty: int) -> bool:
     return stock_qty < LOW_STOCK_THRESHOLD
 
+@router.get("/by-barcode/{barcode}", response_model=ProductOut)
+def get_product_by_barcode(
+    barcode: str,
+    db: Session = Depends(get_db),
+    current_business: Business = Depends(get_current_business)
+):
+    """Get product by barcode for POS lookup"""
+    product = db.query(Product).filter(
+        Product.barcode == barcode,
+        Product.business_id == current_business.id
+    ).first()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found for this barcode")
+    
+    product_out = ProductOut.from_orm(product)
+    product_out.low_stock = check_low_stock(product.stock_qty)
+    
+    return product_out
+
 @router.get("/import-template")
 def download_import_template():
-    """Generate and return an Excel template for product import"""
-    
     wb = Workbook()
     ws = wb.active
     ws.title = "Products Import Template"
     
-    headers = ['name', 'category', 'price', 'stock_qty', 'unit']
+    headers = ['name', 'category', 'barcode', 'price', 'stock_qty', 'unit']
     
     header_font = Font(bold=True, color="FFFFFF", size=12)
     header_fill = PatternFill(start_color="2563EB", end_color="2563EB", fill_type="solid")
@@ -42,9 +60,9 @@ def download_import_template():
         cell.alignment = header_alignment
     
     examples = [
-        {'name': 'Panadol', 'category': 'Medicine', 'price': 50.0, 'stock_qty': 100, 'unit': 'pcs'},
-        {'name': 'Cough Syrup', 'category': 'Medicine', 'price': 150.0, 'stock_qty': 50, 'unit': 'bottle'},
-        {'name': 'Bandage', 'category': 'Medical Supplies', 'price': 20.0, 'stock_qty': 200, 'unit': 'pcs'}
+        {'name': 'Panadol', 'category': 'Medicine', 'barcode': '8901234567890', 'price': 50.0, 'stock_qty': 100, 'unit': 'pcs'},
+        {'name': 'Cough Syrup', 'category': 'Medicine', 'barcode': '8901234567891', 'price': 150.0, 'stock_qty': 50, 'unit': 'bottle'},
+        {'name': 'Bandage', 'category': 'Medical Supplies', 'barcode': '8901234567892', 'price': 20.0, 'stock_qty': 200, 'unit': 'pcs'}
     ]
     
     for row_idx, example in enumerate(examples, 2):
@@ -52,29 +70,24 @@ def download_import_template():
             ws.cell(row=row_idx, column=col_idx, value=example.get(header, ''))
     
     ws2 = wb.create_sheet("Instructions")
-    
     instructions = [
         "Product Import Template - Instructions",
         "",
-        "Required Columns (must be present):",
+        "Required Columns:",
         "1. name - Product name (required)",
-        "2. price - Product price in numbers (required)",
+        "2. price - Product price (required)",
         "",
         "Optional Columns:",
-        "3. category - Product category (optional)",
-        "4. stock_qty - Available stock quantity (optional, defaults to 0)",
-        "5. unit - Unit of measurement e.g., pcs, kg, box (optional)",
+        "3. category - Product category",
+        "4. barcode - Product barcode/scan code",
+        "5. stock_qty - Stock quantity (defaults to 0)",
+        "6. unit - Unit of measurement",
         "",
         "Rules:",
         "- Column names are case-insensitive",
         "- Price must be greater than 0",
-        "- Stock quantity cannot be negative",
-        "- Duplicate product names will be skipped",
-        "- Delete example rows before importing your own data",
-        "",
-        "Example:",
-        "| name | category | price | stock_qty | unit |",
-        "| Panadol | Medicine | 50 | 100 | pcs |"
+        "- Stock cannot be negative",
+        "- Duplicate names are skipped"
     ]
     
     for row_idx, text in enumerate(instructions, 1):
@@ -84,9 +97,10 @@ def download_import_template():
     
     ws.column_dimensions['A'].width = 20
     ws.column_dimensions['B'].width = 20
-    ws.column_dimensions['C'].width = 10
+    ws.column_dimensions['C'].width = 15
     ws.column_dimensions['D'].width = 10
     ws.column_dimensions['E'].width = 10
+    ws.column_dimensions['F'].width = 10
     ws2.column_dimensions['A'].width = 60
     
     output = io.BytesIO()
@@ -96,9 +110,7 @@ def download_import_template():
     return StreamingResponse(
         output,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={
-            "Content-Disposition": "attachment; filename=product_import_template.xlsx"
-        }
+        headers={"Content-Disposition": "attachment; filename=product_import_template.xlsx"}
     )
 
 @router.post("/import", status_code=status.HTTP_200_OK)
@@ -109,7 +121,7 @@ async def import_products(
 ):
     filename = file.filename.lower()
     if not (filename.endswith('.csv') or filename.endswith('.xlsx') or filename.endswith('.xls')):
-        raise HTTPException(status_code=400, detail="Invalid file type. Please upload .csv, .xlsx, or .xls file")
+        raise HTTPException(status_code=400, detail="Invalid file type")
     
     try:
         content = await file.read()
@@ -148,11 +160,11 @@ async def import_products(
                 try:
                     price = float(price_raw)
                     if price <= 0:
-                        errors.append({"row": row_num, "error": f"Price must be greater than 0"})
+                        errors.append({"row": row_num, "error": "Price must be greater than 0"})
                         failed += 1
                         continue
                 except (ValueError, TypeError):
-                    errors.append({"row": row_num, "error": f"Invalid price value: '{price_raw}'"})
+                    errors.append({"row": row_num, "error": f"Invalid price: '{price_raw}'"})
                     failed += 1
                     continue
                 
@@ -167,12 +179,15 @@ async def import_products(
                             failed += 1
                             continue
                 except (ValueError, TypeError):
-                    errors.append({"row": row_num, "error": f"Invalid stock quantity: '{stock_raw}'"})
+                    errors.append({"row": row_num, "error": f"Invalid stock: '{stock_raw}'"})
                     failed += 1
                     continue
                 
                 category_raw = row.get('category')
                 category = str(category_raw).strip() if pd.notna(category_raw) and str(category_raw).strip() != 'nan' else None
+                
+                barcode_raw = row.get('barcode')
+                barcode = str(barcode_raw).strip() if pd.notna(barcode_raw) and str(barcode_raw).strip() != 'nan' else None
                 
                 unit_raw = row.get('unit')
                 unit = str(unit_raw).strip() if pd.notna(unit_raw) and str(unit_raw).strip() != 'nan' else None
@@ -180,13 +195,14 @@ async def import_products(
                 name_lower = name.lower()
                 if name_lower in existing_names:
                     skipped_duplicates += 1
-                    errors.append({"row": row_num, "error": f"Duplicate product name '{name}' — skipped"})
+                    errors.append({"row": row_num, "error": f"Duplicate name '{name}' — skipped"})
                     continue
                 
                 db_product = Product(
                     business_id=current_business.id,
                     name=name,
                     category=category,
+                    barcode=barcode,
                     price=price,
                     stock_qty=stock_qty,
                     unit=unit
@@ -197,7 +213,7 @@ async def import_products(
                 imported += 1
                 
             except Exception as e:
-                errors.append({"row": row_num, "error": f"Unexpected error: {str(e)}"})
+                errors.append({"row": row_num, "error": str(e)})
                 failed += 1
         
         if imported > 0:
@@ -218,7 +234,7 @@ async def import_products(
         raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to import products: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Import failed: {str(e)}")
 
 @router.post("/", response_model=ProductOut, status_code=status.HTTP_201_CREATED)
 def create_product(
@@ -231,6 +247,7 @@ def create_product(
             business_id=current_business.id,
             name=product_data.name,
             category=product_data.category,
+            barcode=product_data.barcode,
             price=product_data.price,
             stock_qty=product_data.stock_qty,
             unit=product_data.unit,
@@ -263,7 +280,7 @@ def list_products(
     
     if search:
         search_term = f"%{search}%"
-        query = query.filter(or_(Product.name.ilike(search_term), Product.category.ilike(search_term)))
+        query = query.filter(or_(Product.name.ilike(search_term), Product.category.ilike(search_term), Product.barcode.ilike(search_term)))
     
     if category:
         query = query.filter(Product.category == category)

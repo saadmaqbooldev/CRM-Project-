@@ -21,19 +21,24 @@ def sales_report(
     db: Session = Depends(get_db),
     current_business: Business = Depends(get_current_business)
 ):
+    """Get sales report for date range. Defaults to last 30 days."""
+    
+    # Default to last 30 days if no dates provided
+    if not date_from:
+        date_from = date.today() - timedelta(days=30)
+    if not date_to:
+        date_to = date.today()
+    
     query = db.query(
         func.date(Order.created_at).label("date"),
         func.count(Order.id).label("order_count"),
         func.coalesce(func.sum(Order.total_amount), 0.0).label("revenue")
     ).filter(
         Order.business_id == current_business.id,
-        Order.status == "completed"
+        Order.status == "completed",
+        Order.created_at >= date_from,
+        Order.created_at < date_to + timedelta(days=1)
     )
-    
-    if date_from:
-        query = query.filter(Order.created_at >= date_from)
-    if date_to:
-        query = query.filter(Order.created_at < date_to + timedelta(days=1))
     
     daily_sales = query.group_by(func.date(Order.created_at)).order_by(func.date(Order.created_at)).all()
     
@@ -60,6 +65,8 @@ def top_customers_report(
     db: Session = Depends(get_db),
     current_business: Business = Depends(get_current_business)
 ):
+    """Get top customers by revenue"""
+    
     top_customers = db.query(
         Customer.id,
         Customer.name,
@@ -74,7 +81,10 @@ def top_customers_report(
         Order.business_id == current_business.id,
         Order.status == "completed"
     ).group_by(
-        Customer.id, Customer.name, Customer.email, Customer.phone
+        Customer.id,
+        Customer.name,
+        Customer.email,
+        Customer.phone
     ).order_by(
         func.sum(Order.total_amount).desc()
     ).limit(limit).all()
@@ -98,6 +108,8 @@ def top_products_report(
     db: Session = Depends(get_db),
     current_business: Business = Depends(get_current_business)
 ):
+    """Get top products by quantity sold and revenue"""
+    
     top_products = db.query(
         Product.id,
         Product.name,
@@ -113,7 +125,9 @@ def top_products_report(
         Order.business_id == current_business.id,
         Order.status == "completed"
     ).group_by(
-        Product.id, Product.name, Product.category
+        Product.id,
+        Product.name,
+        Product.category
     ).order_by(
         func.sum(OrderItem.quantity).desc()
     ).limit(limit).all()
@@ -136,6 +150,7 @@ def outstanding_balances(
     current_business: Business = Depends(get_current_business)
 ):
     """List all customers with balance_due > 0, sorted highest first"""
+    
     customers = db.query(Customer).filter(
         Customer.business_id == current_business.id,
         Customer.balance_due > 0

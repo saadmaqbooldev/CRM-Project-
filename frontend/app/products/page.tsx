@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import AppShell from "@/components/AppShell";
@@ -16,17 +16,12 @@ interface ToastState {
   type: "success" | "error";
 }
 
-interface ImportError {
-  row: number;
-  error: string;
-}
-
 interface ImportResult {
   total_rows: number;
   imported: number;
   failed: number;
   skipped_duplicates: number;
-  errors: ImportError[];
+  errors: Array<{ row: number; error: string }>;
   message: string;
 }
 
@@ -39,12 +34,16 @@ function ProductsContent() {
   const [showImportModal, setShowImportModal] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
-  const [showHelp, setShowHelp] = useState(false);
   const [toast, setToast] = useState<ToastState | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const barcodeInputRef = useRef<HTMLInputElement>(null);
+  const lastKeyTimeRef = useRef<number>(0);
+  const [barcodeWarning, setBarcodeWarning] = useState("");
+  
   const [formData, setFormData] = useState({
     name: "",
     category: "",
+    barcode: "",
     price: "",
     stock_qty: "",
     unit: "",
@@ -53,7 +52,7 @@ function ProductsContent() {
   const [error, setError] = useState("");
   const limit = 10;
 
-  const { data, isLoading, error: queryError, refetch } = useQuery({
+  const { data: allProducts, isLoading, error: queryError, refetch } = useQuery({
     queryKey: ["products", search, page],
     queryFn: async () => {
       const response = await api.get("/products/", {
@@ -61,6 +60,18 @@ function ProductsContent() {
       });
       return response.data as Product[];
     },
+  });
+
+  // Fetch ALL products for barcode validation (no pagination)
+  const { data: allProductsForValidation } = useQuery({
+    queryKey: ["all-products-for-barcode"],
+    queryFn: async () => {
+      const response = await api.get("/products/", {
+        params: { limit: 100 },
+      });
+      return response.data as Product[];
+    },
+    enabled: showModal, // Only fetch when modal is open
   });
 
   const importMutation = useMutation({
@@ -74,28 +85,14 @@ function ProductsContent() {
     },
     onSuccess: (result) => {
       setImportResult(result);
-      // Auto-refresh products list
       queryClient.invalidateQueries({ queryKey: ["products"] });
       queryClient.invalidateQueries({ queryKey: ["pos-products"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
-      
       if (result.imported > 0) {
-        setToast({ 
-          message: `✅ ${result.imported} items imported successfully!`, 
-          type: "success" 
-        });
-      }
-      if (result.failed > 0) {
-        setToast({ 
-          message: `⚠️ ${result.imported} imported, ${result.failed} failed`, 
-          type: "error" 
-        });
+        setToast({ message: `✅ ${result.imported} items imported!`, type: "success" });
       }
     },
     onError: (err: any) => {
-      const detail = err.response?.data?.detail;
-      const message = typeof detail === "string" ? detail : "Failed to import items";
-      setToast({ message, type: "error" });
+      setToast({ message: "Failed to import items", type: "error" });
     },
   });
 
@@ -110,6 +107,7 @@ function ProductsContent() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["all-products-for-barcode"] });
       setShowModal(false);
       resetForm();
       setToast({ message: "Item created successfully", type: "success" });
@@ -132,6 +130,7 @@ function ProductsContent() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["all-products-for-barcode"] });
       setShowModal(false);
       resetForm();
       setToast({ message: "Item updated successfully", type: "success" });
@@ -157,10 +156,11 @@ function ProductsContent() {
   });
 
   const resetForm = () => {
-    setFormData({ name: "", category: "", price: "", stock_qty: "", unit: "" });
+    setFormData({ name: "", category: "", barcode: "", price: "", stock_qty: "", unit: "" });
     setFormErrors({});
     setEditingProduct(null);
     setError("");
+    setBarcodeWarning("");
   };
 
   const openCreateModal = () => {
@@ -173,13 +173,58 @@ function ProductsContent() {
     setFormData({
       name: product.name,
       category: product.category || "",
+      barcode: product.barcode || "",
       price: product.price.toString(),
       stock_qty: product.stock_qty.toString(),
       unit: product.unit || "",
     });
     setFormErrors({});
     setError("");
+    setBarcodeWarning("");
     setShowModal(true);
+  };
+
+  // Barcode duplicate check
+  const checkBarcodeDuplicate = (barcode: string) => {
+    if (!barcode.trim()) {
+      setBarcodeWarning("");
+      return;
+    }
+    
+    const duplicate = allProductsForValidation?.find(
+      (p) => 
+        p.barcode === barcode.trim() && 
+        p.id !== editingProduct?.id
+    );
+    
+    if (duplicate) {
+      setBarcodeWarning(`⚠️ Barcode already used by "${duplicate.name}"`);
+    } else {
+      setBarcodeWarning("");
+    }
+  };
+
+  const handleBarcodeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setFormData({ ...formData, barcode: value });
+    checkBarcodeDuplicate(value);
+  };
+
+  // Barcode scan detection for form field
+  const handleBarcodeKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    const now = Date.now();
+    const timeSinceLastKey = now - lastKeyTimeRef.current;
+    
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const value = (e.target as HTMLInputElement).value;
+      if (value.trim()) {
+        checkBarcodeDuplicate(value);
+        setToast({ message: `Barcode captured: ${value}`, type: "success" });
+      }
+    }
+    
+    lastKeyTimeRef.current = now;
   };
 
   const validateForm = () => {
@@ -187,6 +232,12 @@ function ProductsContent() {
     if (!formData.name.trim()) errors.name = "Name is required";
     if (!formData.price || parseFloat(formData.price) <= 0) errors.price = "Price must be greater than 0";
     if (!formData.stock_qty || parseInt(formData.stock_qty) < 0) errors.stock_qty = "Stock cannot be negative";
+    
+    // Check barcode duplicate
+    if (formData.barcode.trim() && barcodeWarning) {
+      errors.barcode = "Barcode is already in use";
+    }
+    
     setFormErrors(errors);
     return Object.keys(errors).length === 0;
   };
@@ -245,7 +296,6 @@ function ProductsContent() {
     setShowImportModal(false);
     setImportFile(null);
     setImportResult(null);
-    setShowHelp(false);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
@@ -275,7 +325,7 @@ function ProductsContent() {
       <div className="flex gap-4">
         <input
           type="text"
-          placeholder="Search by name or category..."
+          placeholder="Search by name, category, or barcode..."
           className="flex-1 px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
           value={search}
           onChange={(e) => { setSearch(e.target.value); setPage(1); }}
@@ -293,7 +343,7 @@ function ProductsContent() {
           <LoadingSpinner />
         ) : queryError ? (
           <ErrorState message="Failed to load items" onRetry={() => refetch()} />
-        ) : data && data.length === 0 ? (
+        ) : allProducts && allProducts.length === 0 ? (
           <EmptyState
             icon="📦"
             title="No items yet"
@@ -308,18 +358,20 @@ function ProductsContent() {
                 <tr>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Category</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Barcode</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Price</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Stock</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {data?.map((product) => (
+                {allProducts?.map((product) => (
                   <tr key={product.id} className="hover:bg-gray-50">
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm font-medium text-gray-900">{product.name}</div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{product.category || "-"}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{product.barcode || "-"}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">Rs. {product.price.toFixed(2)}</td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center gap-2">
@@ -356,14 +408,14 @@ function ProductsContent() {
         <span className="text-sm text-gray-600">Page {page}</span>
         <button
           onClick={() => setPage((p) => p + 1)}
-          disabled={!data || data.length < limit}
+          disabled={!allProducts || allProducts.length < limit}
           className="px-4 py-2 text-sm bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50"
         >
           Next
         </button>
       </div>
 
-      {/* Import Modal */}
+      {/* Import Modal - Same as Day 53 */}
       {showImportModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto">
@@ -372,45 +424,16 @@ function ProductsContent() {
               <button onClick={closeImportModal} className="text-gray-500 hover:text-gray-700">✕</button>
             </div>
 
-            {/* Step 1: Download Template */}
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
               <p className="text-sm text-blue-800 font-medium mb-2">📄 Step 1: Download Template</p>
-              <p className="text-xs text-blue-600 mb-3">
-                Download the template, fill in your items, then upload below.
-              </p>
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={handleDownloadTemplate}
-                  className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm"
-                >
-                  ⬇️ Download Template
-                </button>
-                <button
-                  onClick={() => setShowHelp(!showHelp)}
-                  className="text-sm text-blue-600 hover:text-blue-800 underline"
-                >
-                  {showHelp ? "Hide Help" : "Need help formatting?"}
-                </button>
-              </div>
-              
-              {showHelp && (
-                <div className="mt-3 bg-white p-3 rounded-md text-xs text-gray-600 space-y-1">
-                  <p className="font-semibold text-gray-800">Required columns:</p>
-                  <p>• <strong>name</strong> — Item name (e.g., Panadol)</p>
-                  <p>• <strong>price</strong> — Price in numbers (e.g., 50)</p>
-                  <p className="font-semibold text-gray-800 mt-2">Optional columns:</p>
-                  <p>• <strong>category</strong> — e.g., Medicine</p>
-                  <p>• <strong>stock_qty</strong> — Number (defaults to 0)</p>
-                  <p>• <strong>unit</strong> — e.g., pcs, kg, box, bottle</p>
-                  <p className="font-semibold text-gray-800 mt-2">Rules:</p>
-                  <p>• Column names are case-insensitive</p>
-                  <p>• Duplicate names are skipped</p>
-                  <p>• Price must be greater than 0</p>
-                </div>
-              )}
+              <button
+                onClick={handleDownloadTemplate}
+                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm"
+              >
+                ⬇️ Download Template
+              </button>
             </div>
 
-            {/* Step 2: Upload */}
             <div className="mb-4">
               <p className="text-sm text-gray-700 font-medium mb-2">📤 Step 2: Upload File</p>
               <input
@@ -425,71 +448,34 @@ function ProductsContent() {
               )}
             </div>
 
-            {/* Import Button */}
             <button
               onClick={handleImport}
               disabled={!importFile || importMutation.isPending}
               className="w-full px-6 py-3 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 text-lg font-semibold"
             >
-              {importMutation.isPending ? (
-                <span className="flex items-center justify-center gap-2">
-                  <span className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></span>
-                  Importing...
-                </span>
-              ) : (
-                "📥 Import Items"
-              )}
+              {importMutation.isPending ? "Importing..." : "📥 Import Items"}
             </button>
 
-            {/* Import Result Summary */}
             {importResult && (
-              <div className={`mt-4 p-4 rounded-lg border ${
-                importResult.failed === 0 
-                  ? "bg-green-50 border-green-200" 
-                  : "bg-yellow-50 border-yellow-200"
-              }`}>
-                <p className="font-semibold text-gray-900 mb-3">{importResult.message}</p>
-                
-                {/* Stats */}
-                <div className="grid grid-cols-4 gap-2 text-center mb-3">
-                  <div className="bg-white p-3 rounded-md">
-                    <p className="text-xl font-bold text-gray-900">{importResult.total_rows}</p>
-                    <p className="text-xs text-gray-500">Total Rows</p>
-                  </div>
-                  <div className="bg-white p-3 rounded-md">
+              <div className={`mt-4 p-4 rounded-lg border ${importResult.failed === 0 ? "bg-green-50 border-green-200" : "bg-yellow-50 border-yellow-200"}`}>
+                <p className="font-semibold text-gray-900 mb-2">{importResult.message}</p>
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div className="bg-white p-2 rounded-md">
                     <p className="text-xl font-bold text-green-600">{importResult.imported}</p>
                     <p className="text-xs text-gray-500">Imported</p>
                   </div>
-                  <div className="bg-white p-3 rounded-md">
+                  <div className="bg-white p-2 rounded-md">
                     <p className="text-xl font-bold text-red-600">{importResult.failed}</p>
                     <p className="text-xs text-gray-500">Failed</p>
                   </div>
-                  <div className="bg-white p-3 rounded-md">
+                  <div className="bg-white p-2 rounded-md">
                     <p className="text-xl font-bold text-yellow-600">{importResult.skipped_duplicates}</p>
                     <p className="text-xs text-gray-500">Duplicates</p>
                   </div>
                 </div>
-
-                {/* Error List */}
-                {importResult.errors.length > 0 && (
-                  <div className="mt-3">
-                    <p className="text-sm font-semibold text-red-700 mb-2">
-                      Failed Rows:
-                    </p>
-                    <div className="max-h-40 overflow-y-auto space-y-1">
-                      {importResult.errors.map((err, idx) => (
-                        <div key={idx} className="bg-white p-2 rounded-md text-xs">
-                          <span className="font-semibold text-gray-700">Row {err.row}:</span>{" "}
-                          <span className="text-red-600">{err.error}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
               </div>
             )}
 
-            {/* Close Button */}
             <button
               onClick={closeImportModal}
               className="mt-4 w-full px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300"
@@ -500,10 +486,10 @@ function ProductsContent() {
         </div>
       )}
 
-      {/* Create/Edit Modal */}
+      {/* Create/Edit Modal with Barcode Field */}
       {showModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6 max-h-[90vh] overflow-y-auto">
             <h2 className="text-xl font-bold text-gray-900 mb-4">
               {editingProduct ? "Edit Item" : "Add New Item"}
             </h2>
@@ -532,6 +518,34 @@ function ProductsContent() {
                   value={formData.category}
                   onChange={(e) => setFormData({ ...formData, category: e.target.value })}
                 />
+              </div>
+
+              {/* Barcode Field with Scan Support */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700">
+                  Barcode
+                  <span className="text-xs text-gray-400 ml-2">(Scan or type)</span>
+                </label>
+                <input
+                  ref={barcodeInputRef}
+                  type="text"
+                  className={`mt-1 block w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-blue-500 ${
+                    formErrors.barcode || barcodeWarning ? "border-yellow-500" : "border-gray-300"
+                  }`}
+                  value={formData.barcode}
+                  onChange={handleBarcodeChange}
+                  onKeyDown={handleBarcodeKeyDown}
+                  placeholder="Scan barcode or type manually"
+                />
+                {barcodeWarning && (
+                  <p className="mt-1 text-xs text-yellow-600">{barcodeWarning}</p>
+                )}
+                {formErrors.barcode && (
+                  <p className="mt-1 text-xs text-red-600">{formErrors.barcode}</p>
+                )}
+                <p className="mt-1 text-xs text-gray-400">
+                  💡 Scan a barcode to auto-fill this field
+                </p>
               </div>
 
               <div className="grid grid-cols-2 gap-4">

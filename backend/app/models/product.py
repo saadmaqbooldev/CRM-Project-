@@ -9,6 +9,7 @@ class Product(Base):
     business_id = Column(Integer, ForeignKey("businesses.id"), nullable=False)
     name = Column(String(100), nullable=False)
     category = Column(String(50), nullable=True)
+    barcode = Column(String(50), nullable=True)
     price = Column(Float, nullable=False, default=0.0)
     stock_qty = Column(Integer, nullable=False, default=0)
     unit = Column(String(20), nullable=True)

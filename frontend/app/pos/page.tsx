@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import ProtectedRoute from "@/components/ProtectedRoute";
@@ -17,6 +17,7 @@ interface CartItem {
   quantity: number;
   unit_price: number;
   stock_qty: number;
+  barcode?: string | null;
 }
 
 interface ToastState {
@@ -35,6 +36,13 @@ function POSContent() {
   const [showCustomerSelector, setShowCustomerSelector] = useState(false);
   const [paymentType, setPaymentType] = useState<"cash" | "credit">("cash");
   const [receipt, setReceipt] = useState<Receipt | null>(null);
+  const [scanStatus, setScanStatus] = useState("");
+  
+  // Barcode detection refs
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const lastKeyTimeRef = useRef<number>(0);
+  const barcodeBufferRef = useRef<string>("");
+  const isScanningRef = useRef<boolean>(false);
 
   useEffect(() => {
     queryClient.invalidateQueries({ queryKey: ["pos-products"] });
@@ -55,7 +63,7 @@ function POSContent() {
     queryKey: ["pos-customers", customerSearch],
     queryFn: async () => {
       const response = await api.get("/customers/", {
-        params: { search: customerSearch || undefined, limit: 20 },
+        params: { search: customerSearch || undefined, limit:20 },
       });
       return response.data as Customer[];
     },
@@ -74,9 +82,7 @@ function POSContent() {
       queryClient.invalidateQueries({ queryKey: ["customers"] });
       
       setToast({ 
-        message: paymentType === "credit" 
-          ? "Credit sale recorded!" 
-          : "Sale completed successfully!", 
+        message: paymentType === "credit" ? "Credit sale recorded!" : "Sale completed successfully!", 
         type: "success" 
       });
       
@@ -114,6 +120,71 @@ function POSContent() {
     return customers?.find((c) => c.id === selectedCustomer)?.name || null;
   }, [customers, selectedCustomer]);
 
+  // ============ BARCODE SCAN DETECTION ============
+  
+  const handleBarcodeScan = async (barcode: string) => {
+    if (!barcode.trim()) return;
+    
+    setScanStatus("Looking up barcode...");
+    
+    try {
+      const response = await api.get(`/products/by-barcode/${barcode.trim()}`);
+      const product = response.data as Product;
+      
+      // Add to cart
+      addToCart(product);
+      setScanStatus("");
+      setSearch("");
+      setToast({ message: `✅ ${product.name} added to cart`, type: "success" });
+    } catch (err: any) {
+      if (err.response?.status === 404) {
+        setScanStatus(`Product not found for barcode: ${barcode}`);
+        setToast({ 
+          message: `❌ No product found for barcode: ${barcode}`, 
+          type: "error" 
+        });
+      } else {
+        setScanStatus("Error looking up barcode");
+        setToast({ message: "Error looking up barcode", type: "error" });
+      }
+    }
+  };
+
+  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    const now = Date.now();
+    const timeSinceLastKey = now - lastKeyTimeRef.current;
+    
+    // If Enter is pressed
+    if (e.key === "Enter") {
+      const currentValue = (e.target as HTMLInputElement).value;
+      
+      // Check if this was a fast scan (keys arrived quickly)
+      if (isScanningRef.current && currentValue.trim().length >= 5) {
+        e.preventDefault();
+        handleBarcodeScan(currentValue);
+        // Clear for next scan
+        (e.target as HTMLInputElement).value = "";
+        setSearch("");
+        barcodeBufferRef.current = "";
+        isScanningRef.current = false;
+      }
+      lastKeyTimeRef.current = now;
+      return;
+    }
+    
+    // Detect fast typing (barcode scanner)
+    if (timeSinceLastKey < 50 && timeSinceLastKey > 0) {
+      isScanningRef.current = true;
+    } else if (timeSinceLastKey > 200) {
+      // Slow typing = manual search
+      isScanningRef.current = false;
+    }
+    
+    lastKeyTimeRef.current = now;
+  };
+
+  // ============ END BARCODE DETECTION ============
+
   const addToCart = (product: Product) => {
     if (product.stock_qty <= 0) {
       setToast({ message: `${product.name} is out of stock`, type: "error" });
@@ -148,6 +219,7 @@ function POSContent() {
           quantity: 1,
           unit_price: product.price,
           stock_qty: product.stock_qty,
+          barcode: product.barcode || null,
         },
       ];
     });
@@ -198,7 +270,6 @@ function POSContent() {
       return;
     }
 
-    // Credit sale requires a customer
     if (paymentType === "credit" && !selectedCustomer) {
       setToast({ 
         message: "Credit sale requires a customer. Please select a customer.", 
@@ -207,7 +278,6 @@ function POSContent() {
       return;
     }
 
-    // Confirmation for credit sale
     if (paymentType === "credit" && selectedCustomerName) {
       const confirmCredit = confirm(
         `This sale of Rs. ${totalAmount.toFixed(2)} will be added to ${selectedCustomerName}'s balance as credit.\n\nContinue?`
@@ -255,16 +325,29 @@ function POSContent() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Product List */}
         <div className="lg:col-span-2 space-y-4">
+          {/* Search with Barcode Detection */}
           <div className="bg-white p-4 rounded-lg shadow">
             <input
+              ref={searchInputRef}
               type="text"
-              placeholder="Search items..."
+              placeholder="Scan barcode or search items..."
               className="w-full px-4 py-3 border border-gray-300 rounded-md text-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={handleSearchKeyDown}
+              autoFocus
             />
+            {scanStatus && (
+              <p className={`text-sm mt-2 ${scanStatus.includes("not found") || scanStatus.includes("Error") ? "text-red-600" : "text-blue-600"}`}>
+                {scanStatus}
+              </p>
+            )}
+            <p className="text-xs text-gray-400 mt-1">
+              💡 Tip: Scan barcode directly — it will auto-add to cart
+            </p>
           </div>
 
+          {/* Product Grid */}
           <div className="bg-white p-4 rounded-lg shadow">
             {isLoading ? (
               <div className="flex justify-center py-10">
@@ -301,6 +384,11 @@ function POSContent() {
                       <div className="text-sm text-gray-500 mt-1">
                         {product.category || "General"}
                       </div>
+                      {product.barcode && (
+                        <div className="text-xs text-gray-400 mt-1">
+                          {product.barcode}
+                        </div>
+                      )}
                       <div className="text-blue-600 font-bold mt-2">
                         Rs. {product.price.toFixed(2)}
                       </div>
@@ -441,7 +529,7 @@ function POSContent() {
             )}
           </div>
 
-          {/* Credit Confirmation Banner */}
+          {/* Credit Confirmation */}
           {paymentType === "credit" && selectedCustomer && selectedCustomerName && (
             <div className="mx-4 my-3 p-3 bg-orange-50 border border-orange-200 rounded-md">
               <p className="text-sm text-orange-800">
@@ -455,7 +543,7 @@ function POSContent() {
           <div className="flex-1 overflow-y-auto max-h-48 p-4 space-y-3">
             {cart.length === 0 ? (
               <p className="text-center text-gray-500 py-8">
-                Tap items to add them
+                Scan barcode or tap items to add
               </p>
             ) : (
               cart.map((item) => (
