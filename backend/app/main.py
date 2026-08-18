@@ -14,9 +14,8 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-        "https://kova-crm.vercel.app",  # Production Vercel URL
-        "https://kova-crm-git-main.vercel.app",  # Preview deployments
-        "https://*.vercel.app",  # All Vercel preview URLs
+        "https://kova-crm.vercel.app",
+        "https://*.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
