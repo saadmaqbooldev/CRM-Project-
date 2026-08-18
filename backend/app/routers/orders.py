@@ -45,6 +45,7 @@ def serialize_order(order: Order) -> dict:
     return order_dict
 
 def process_order_items(items, db, current_business):
+    """Process items: validate products, calculate total, deduct stock (if tracked)."""
     total_amount = 0.0
     order_items = []
     
@@ -57,12 +58,17 @@ def process_order_items(items, db, current_business):
         if not product:
             raise HTTPException(status_code=404, detail=f"Product {item.product_id} not found")
         
-        if product.stock_qty < item.quantity:
-            raise HTTPException(status_code=400, detail=f"Insufficient stock for {product.name}")
+        # Only check/deduct stock if stock is tracked (not None)
+        if product.stock_qty is not None:
+            if product.stock_qty < item.quantity:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Insufficient stock for product: {product.name}. Available: {product.stock_qty}"
+                )
+            product.stock_qty -= item.quantity
         
         unit_price = product.price
         total_amount += unit_price * item.quantity
-        product.stock_qty -= item.quantity
         
         order_items.append({
             "product_id": product.id,
@@ -104,6 +110,8 @@ def save_order(db, current_business, customer_id, total_amount, notes, order_sta
     db.commit()
     db.refresh(db_order)
     return db_order
+
+# ============ QUICK SALE ============
 
 @router.post("/quick-sale", response_model=OrderOut, status_code=status.HTTP_201_CREATED)
 def create_quick_sale(
@@ -161,6 +169,8 @@ def create_quick_sale(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to create quick sale: {str(e)}")
 
+# ============ REGULAR ORDER ============
+
 @router.post("/", response_model=OrderOut, status_code=status.HTTP_201_CREATED)
 def create_order(
     order_data: OrderCreate,
@@ -196,6 +206,8 @@ def create_order(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to create order: {str(e)}")
 
+# ============ LIST ORDERS ============
+
 @router.get("/", response_model=List[OrderOut])
 def list_orders(
     page: int = Query(1, ge=1),
@@ -222,6 +234,8 @@ def list_orders(
     orders = query.order_by(Order.created_at.desc()).offset(offset).limit(limit).all()
     return [serialize_order(order) for order in orders]
 
+# ============ GET ORDER ============
+
 @router.get("/{order_id}", response_model=OrderOut)
 def get_order(
     order_id: int,
@@ -237,6 +251,8 @@ def get_order(
         raise HTTPException(status_code=404, detail="Order not found")
     
     return serialize_order(order)
+
+# ============ GET RECEIPT ============
 
 @router.get("/{order_id}/receipt", response_model=ReceiptOut)
 def get_order_receipt(
@@ -275,6 +291,8 @@ def get_order_receipt(
         notes=order.notes
     )
 
+# ============ UPDATE STATUS ============
+
 @router.put("/{order_id}/status", response_model=OrderOut)
 def update_order_status(
     order_id: int,
@@ -292,12 +310,13 @@ def update_order_status(
     
     try:
         if status_data.status == "cancelled" and order.status != "cancelled":
+            # Restock only if stock is tracked
             for item in order.items:
                 product = db.query(Product).filter(
                     Product.id == item.product_id,
                     Product.business_id == current_business.id
                 ).first()
-                if product:
+                if product and product.stock_qty is not None:
                     product.stock_qty += item.quantity
             
             # If cancelled credit order, reduce balance_due
@@ -305,6 +324,8 @@ def update_order_status(
                 customer = db.query(Customer).filter(Customer.id == order.customer_id).first()
                 if customer:
                     customer.balance_due -= order.total_amount
+                    if customer.balance_due < 0:
+                        customer.balance_due = 0
         
         order.status = status_data.status
         db.commit()

@@ -7,7 +7,7 @@ class ProductBase(BaseModel):
     category: Optional[str] = Field(None, max_length=50)
     barcode: Optional[str] = Field(None, max_length=50)
     price: float = Field(..., gt=0)
-    stock_qty: int = Field(..., ge=0)
+    stock_qty: Optional[int] = Field(None, ge=0)  # Optional, NULL = not tracked
     unit: Optional[str] = Field(None, max_length=20)
     attributes: Optional[Dict[str, Any]] = None
 

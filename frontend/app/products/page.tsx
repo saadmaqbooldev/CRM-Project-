@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import AppShell from "@/components/AppShell";
@@ -25,6 +25,125 @@ interface ImportResult {
   message: string;
 }
 
+// ============ CATEGORY AUTOCOMPLETE COMPONENT ============
+
+function CategoryAutocomplete({
+  value,
+  onChange,
+  categories,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  categories: string[];
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [highlightIndex, setHighlightIndex] = useState(-1);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+
+  const filteredCategories = value.trim()
+    ? categories.filter((cat) =>
+        cat.toLowerCase().includes(value.trim().toLowerCase())
+      )
+    : categories;
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const handleSelect = (category: string) => {
+    onChange(category);
+    setIsOpen(false);
+    setHighlightIndex(-1);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (!isOpen || filteredCategories.length === 0) {
+      if (e.key === "ArrowDown") setIsOpen(true);
+      return;
+    }
+
+    switch (e.key) {
+      case "ArrowDown":
+        e.preventDefault();
+        setHighlightIndex((prev) =>
+          prev < filteredCategories.length - 1 ? prev + 1 : 0
+        );
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        setHighlightIndex((prev) =>
+          prev > 0 ? prev - 1 : filteredCategories.length - 1
+        );
+        break;
+      case "Enter":
+        e.preventDefault();
+        if (highlightIndex >= 0 && filteredCategories[highlightIndex]) {
+          handleSelect(filteredCategories[highlightIndex]);
+        } else {
+          setIsOpen(false);
+        }
+        break;
+      case "Escape":
+        setIsOpen(false);
+        setHighlightIndex(-1);
+        break;
+    }
+  };
+
+  return (
+    <div ref={wrapperRef} className="relative">
+      <input
+        type="text"
+        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500"
+        value={value}
+        onChange={(e) => {
+          onChange(e.target.value);
+          setIsOpen(true);
+          setHighlightIndex(-1);
+        }}
+        onFocus={() => setIsOpen(true)}
+        onKeyDown={handleKeyDown}
+        placeholder="Type or select category"
+        autoComplete="off"
+      />
+
+      {isOpen && filteredCategories.length > 0 && (
+        <div className="absolute z-10 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+          {filteredCategories.map((category, index) => (
+            <button
+              key={category}
+              type="button"
+              onClick={() => handleSelect(category)}
+              onMouseEnter={() => setHighlightIndex(index)}
+              className={`w-full px-4 py-2 text-left text-sm hover:bg-blue-50 ${
+                index === highlightIndex ? "bg-blue-50" : ""
+              }`}
+            >
+              {category}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {isOpen && value.trim() && filteredCategories.length === 0 && (
+        <div className="absolute z-10 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg p-3">
+          <p className="text-sm text-gray-500">
+            New category: <span className="font-medium text-gray-700">"{value}"</span>
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============ MAIN PRODUCTS CONTENT ============
+
 function ProductsContent() {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
@@ -39,7 +158,7 @@ function ProductsContent() {
   const barcodeInputRef = useRef<HTMLInputElement>(null);
   const lastKeyTimeRef = useRef<number>(0);
   const [barcodeWarning, setBarcodeWarning] = useState("");
-  
+
   const [formData, setFormData] = useState({
     name: "",
     category: "",
@@ -52,6 +171,15 @@ function ProductsContent() {
   const [error, setError] = useState("");
   const limit = 10;
 
+  // Fetch categories for autocomplete
+  const { data: categoriesData } = useQuery({
+    queryKey: ["categories"],
+    queryFn: async () => {
+      const response = await api.get("/products/categories");
+      return response.data.categories as string[];
+    },
+  });
+
   const { data: allProducts, isLoading, error: queryError, refetch } = useQuery({
     queryKey: ["products", search, page],
     queryFn: async () => {
@@ -62,7 +190,6 @@ function ProductsContent() {
     },
   });
 
-  // Fetch ALL products for barcode validation (no pagination)
   const { data: allProductsForValidation } = useQuery({
     queryKey: ["all-products-for-barcode"],
     queryFn: async () => {
@@ -71,7 +198,7 @@ function ProductsContent() {
       });
       return response.data as Product[];
     },
-    enabled: showModal, // Only fetch when modal is open
+    enabled: showModal,
   });
 
   const importMutation = useMutation({
@@ -91,7 +218,7 @@ function ProductsContent() {
         setToast({ message: `✅ ${result.imported} items imported!`, type: "success" });
       }
     },
-    onError: (err: any) => {
+    onError: () => {
       setToast({ message: "Failed to import items", type: "error" });
     },
   });
@@ -101,12 +228,16 @@ function ProductsContent() {
       const response = await api.post("/products/", {
         ...productData,
         price: parseFloat(productData.price),
-        stock_qty: parseInt(productData.stock_qty),
+        stock_qty:
+          productData.stock_qty.trim() !== ""
+            ? parseInt(productData.stock_qty)
+            : null,
       });
       return response.data;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["categories"] });
       queryClient.invalidateQueries({ queryKey: ["all-products-for-barcode"] });
       setShowModal(false);
       resetForm();
@@ -124,12 +255,16 @@ function ProductsContent() {
       const response = await api.put(`/products/${id}`, {
         ...data,
         price: parseFloat(data.price),
-        stock_qty: parseInt(data.stock_qty),
+        stock_qty:
+          data.stock_qty.trim() !== ""
+            ? parseInt(data.stock_qty)
+            : null,
       });
       return response.data;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["categories"] });
       queryClient.invalidateQueries({ queryKey: ["all-products-for-barcode"] });
       setShowModal(false);
       resetForm();
@@ -175,7 +310,10 @@ function ProductsContent() {
       category: product.category || "",
       barcode: product.barcode || "",
       price: product.price.toString(),
-      stock_qty: product.stock_qty.toString(),
+      stock_qty:
+        product.stock_qty !== null && product.stock_qty !== undefined
+          ? product.stock_qty.toString()
+          : "",
       unit: product.unit || "",
     });
     setFormErrors({});
@@ -184,19 +322,16 @@ function ProductsContent() {
     setShowModal(true);
   };
 
-  // Barcode duplicate check
   const checkBarcodeDuplicate = (barcode: string) => {
     if (!barcode.trim()) {
       setBarcodeWarning("");
       return;
     }
-    
+
     const duplicate = allProductsForValidation?.find(
-      (p) => 
-        p.barcode === barcode.trim() && 
-        p.id !== editingProduct?.id
+      (p) => p.barcode === barcode.trim() && p.id !== editingProduct?.id
     );
-    
+
     if (duplicate) {
       setBarcodeWarning(`⚠️ Barcode already used by "${duplicate.name}"`);
     } else {
@@ -210,11 +345,10 @@ function ProductsContent() {
     checkBarcodeDuplicate(value);
   };
 
-  // Barcode scan detection for form field
   const handleBarcodeKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     const now = Date.now();
     const timeSinceLastKey = now - lastKeyTimeRef.current;
-    
+
     if (e.key === "Enter") {
       e.preventDefault();
       const value = (e.target as HTMLInputElement).value;
@@ -223,21 +357,28 @@ function ProductsContent() {
         setToast({ message: `Barcode captured: ${value}`, type: "success" });
       }
     }
-    
+
     lastKeyTimeRef.current = now;
   };
 
   const validateForm = () => {
     const errors: Record<string, string> = {};
     if (!formData.name.trim()) errors.name = "Name is required";
-    if (!formData.price || parseFloat(formData.price) <= 0) errors.price = "Price must be greater than 0";
-    if (!formData.stock_qty || parseInt(formData.stock_qty) < 0) errors.stock_qty = "Stock cannot be negative";
-    
-    // Check barcode duplicate
+    if (!formData.price || parseFloat(formData.price) <= 0)
+      errors.price = "Price must be greater than 0";
+
+    // Stock is OPTIONAL — only validate if provided
+    if (formData.stock_qty.trim() !== "") {
+      const stockVal = parseInt(formData.stock_qty);
+      if (isNaN(stockVal) || stockVal < 0) {
+        errors.stock_qty = "Stock cannot be negative";
+      }
+    }
+
     if (formData.barcode.trim() && barcodeWarning) {
       errors.barcode = "Barcode is already in use";
     }
-    
+
     setFormErrors(errors);
     return Object.keys(errors).length === 0;
   };
@@ -271,7 +412,7 @@ function ProductsContent() {
       a.click();
       window.URL.revokeObjectURL(url);
       setToast({ message: "Template downloaded!", type: "success" });
-    } catch (err) {
+    } catch {
       setToast({ message: "Failed to download template", type: "error" });
     }
   };
@@ -374,15 +515,19 @@ function ProductsContent() {
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{product.barcode || "-"}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">Rs. {product.price.toFixed(2)}</td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm text-gray-900">{product.stock_qty} {product.unit || "pcs"}</span>
-                        {product.stock_qty === 0 && (
-                          <span className="px-2 py-1 text-xs font-medium bg-gray-200 text-gray-800 rounded-full">Out of Stock</span>
-                        )}
-                        {product.stock_qty > 0 && product.low_stock && (
-                          <span className="px-2 py-1 text-xs font-medium bg-red-100 text-red-800 rounded-full">Low Stock</span>
-                        )}
-                      </div>
+                      {product.stock_qty === null || product.stock_qty === undefined ? (
+                        <span className="text-sm text-gray-400">Not tracked</span>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm text-gray-900">{product.stock_qty} {product.unit || "pcs"}</span>
+                          {product.stock_qty === 0 && (
+                            <span className="px-2 py-1 text-xs font-medium bg-gray-200 text-gray-800 rounded-full">Out of Stock</span>
+                          )}
+                          {product.stock_qty > 0 && product.low_stock && (
+                            <span className="px-2 py-1 text-xs font-medium bg-red-100 text-red-800 rounded-full">Low Stock</span>
+                          )}
+                        </div>
+                      )}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm space-x-3">
                       <button onClick={() => openEditModal(product)} className="text-blue-600 hover:text-blue-800">Edit</button>
@@ -415,7 +560,7 @@ function ProductsContent() {
         </button>
       </div>
 
-      {/* Import Modal - Same as Day 53 */}
+      {/* Import Modal */}
       {showImportModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto">
@@ -486,7 +631,7 @@ function ProductsContent() {
         </div>
       )}
 
-      {/* Create/Edit Modal with Barcode Field */}
+      {/* Create/Edit Modal */}
       {showModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6 max-h-[90vh] overflow-y-auto">
@@ -510,17 +655,20 @@ function ProductsContent() {
                 {formErrors.name && <p className="mt-1 text-xs text-red-600">{formErrors.name}</p>}
               </div>
 
+              {/* Category with Autocomplete */}
               <div>
-                <label className="block text-sm font-medium text-gray-700">Category</label>
-                <input
-                  type="text"
-                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500"
+                <label className="block text-sm font-medium text-gray-700">
+                  Category
+                  <span className="text-xs text-gray-400 ml-1">(suggested)</span>
+                </label>
+                <CategoryAutocomplete
                   value={formData.category}
-                  onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+                  onChange={(value) => setFormData({ ...formData, category: value })}
+                  categories={categoriesData || []}
                 />
               </div>
 
-              {/* Barcode Field with Scan Support */}
+              {/* Barcode */}
               <div>
                 <label className="block text-sm font-medium text-gray-700">
                   Barcode
@@ -537,17 +685,11 @@ function ProductsContent() {
                   onKeyDown={handleBarcodeKeyDown}
                   placeholder="Scan barcode or type manually"
                 />
-                {barcodeWarning && (
-                  <p className="mt-1 text-xs text-yellow-600">{barcodeWarning}</p>
-                )}
-                {formErrors.barcode && (
-                  <p className="mt-1 text-xs text-red-600">{formErrors.barcode}</p>
-                )}
-                <p className="mt-1 text-xs text-gray-400">
-                  💡 Scan a barcode to auto-fill this field
-                </p>
+                {barcodeWarning && <p className="mt-1 text-xs text-yellow-600">{barcodeWarning}</p>}
+                {formErrors.barcode && <p className="mt-1 text-xs text-red-600">{formErrors.barcode}</p>}
               </div>
 
+              {/* Price + Optional Stock */}
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Price *</label>
@@ -563,15 +705,22 @@ function ProductsContent() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Stock Qty *</label>
+                  <label className="block text-sm font-medium text-gray-700">
+                    Stock Qty
+                    <span className="text-xs text-gray-400 ml-1">(optional)</span>
+                  </label>
                   <input
                     type="number"
                     min="0"
                     className={`mt-1 block w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-blue-500 ${formErrors.stock_qty ? "border-red-500" : "border-gray-300"}`}
                     value={formData.stock_qty}
                     onChange={(e) => { setFormData({ ...formData, stock_qty: e.target.value }); setFormErrors({ ...formErrors, stock_qty: "" }); }}
+                    placeholder="Leave empty if not tracked"
                   />
                   {formErrors.stock_qty && <p className="mt-1 text-xs text-red-600">{formErrors.stock_qty}</p>}
+                  <p className="mt-1 text-xs text-gray-400">
+                    Leave empty for services
+                  </p>
                 </div>
               </div>
 
@@ -579,7 +728,7 @@ function ProductsContent() {
                 <label className="block text-sm font-medium text-gray-700">Unit</label>
                 <input
                   type="text"
-                  placeholder="pcs, kg, box, bottle..."
+                  placeholder="pcs, kg, box, bottle, session..."
                   className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500"
                   value={formData.unit}
                   onChange={(e) => setFormData({ ...formData, unit: e.target.value })}

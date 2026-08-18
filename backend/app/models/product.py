@@ -11,7 +11,7 @@ class Product(Base):
     category = Column(String(50), nullable=True)
     barcode = Column(String(50), nullable=True)
     price = Column(Float, nullable=False, default=0.0)
-    stock_qty = Column(Integer, nullable=False, default=0)
+    stock_qty = Column(Integer, nullable=True)  # NULL = not tracked
     unit = Column(String(20), nullable=True)
     attributes = Column(JSON, nullable=True)
     created_at = Column(DateTime, server_default=func.now())

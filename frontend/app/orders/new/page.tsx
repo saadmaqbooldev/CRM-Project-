@@ -29,6 +29,7 @@ function NewOrderContent() {
   const [productSearch, setProductSearch] = useState("");
   const [items, setItems] = useState<LineItem[]>([]);
   const [notes, setNotes] = useState("");
+  const [paymentType, setPaymentType] = useState<"cash" | "credit">("cash");
   const [toast, setToast] = useState<ToastState | null>(null);
   const [error, setError] = useState("");
 
@@ -62,13 +63,17 @@ function NewOrderContent() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["orders"] });
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       setToast({ message: "Order created successfully", type: "success" });
       setTimeout(() => {
         router.push("/orders");
       }, 1500);
     },
     onError: (err: any) => {
-      setError(err.response?.data?.detail || "Failed to create order");
+      const detail = err.response?.data?.detail;
+      const message = typeof detail === "string" ? detail : "Failed to create order";
+      setError(message);
       setToast({ message: "Failed to create order", type: "error" });
     },
   });
@@ -127,13 +132,19 @@ function NewOrderContent() {
     }
 
     if (items.length === 0) {
-      setError("Please add at least one product");
+      setError("Please add at least one item");
+      return;
+    }
+
+    if (paymentType === "credit" && !selectedCustomer) {
+      setError("Credit order requires a customer");
       return;
     }
 
     const orderData = {
       customer_id: selectedCustomer,
       notes: notes || undefined,
+      payment_type: paymentType,
       items: items.map((item) => ({
         product_id: item.product_id,
         quantity: item.quantity,
@@ -145,7 +156,6 @@ function NewOrderContent() {
 
   return (
     <div className="space-y-6">
-      {/* Toast */}
       {toast && (
         <Toast
           message={toast.message}
@@ -212,41 +222,89 @@ function NewOrderContent() {
           </div>
         </div>
 
-        {/* Product Selection */}
+        {/* Payment Type */}
         <div className="bg-white p-6 rounded-lg shadow">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">
-            Add Products
+            Payment Type
+          </h2>
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={() => setPaymentType("cash")}
+              className={`flex-1 px-4 py-3 rounded-md font-medium ${
+                paymentType === "cash"
+                  ? "bg-green-600 text-white"
+                  : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+              }`}
+            >
+              💵 Cash
+            </button>
+            <button
+              type="button"
+              onClick={() => setPaymentType("credit")}
+              className={`flex-1 px-4 py-3 rounded-md font-medium ${
+                paymentType === "credit"
+                  ? "bg-orange-600 text-white"
+                  : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+              }`}
+            >
+              📝 Credit (Udhaar)
+            </button>
+          </div>
+          {paymentType === "credit" && (
+            <p className="text-xs text-orange-600 mt-2">
+              ⚠️ This order will be added to the customer's balance
+            </p>
+          )}
+        </div>
+
+        {/* Item Selection */}
+        <div className="bg-white p-6 rounded-lg shadow">
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">
+            Add Items
           </h2>
           <div className="space-y-3">
             <input
               type="text"
-              placeholder="Search product..."
+              placeholder="Search item..."
               className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
               value={productSearch}
               onChange={(e) => setProductSearch(e.target.value)}
             />
             <div className="max-h-40 overflow-y-auto border border-gray-200 rounded-md">
-              {products?.map((product) => (
-                <button
-                  key={product.id}
-                  type="button"
-                  onClick={() => addItem(product)}
-                  disabled={product.stock_qty <= 0}
-                  className="w-full px-4 py-2 text-left hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <div className="flex justify-between items-center">
-                    <div>
-                      <div className="font-medium text-gray-900">{product.name}</div>
-                      <div className="text-sm text-gray-500">
-                        Stock: {product.stock_qty} {product.unit || "pcs"}
+              {products?.map((product) => {
+                const isOutOfStock =
+                  product.stock_qty !== null &&
+                  product.stock_qty !== undefined &&
+                  product.stock_qty <= 0;
+
+                return (
+                  <button
+                    key={product.id}
+                    type="button"
+                    onClick={() => addItem(product)}
+                    disabled={isOutOfStock}
+                    className="w-full px-4 py-2 text-left hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <div className="font-medium text-gray-900">
+                          {product.name}
+                        </div>
+                        <div className="text-sm text-gray-500">
+                          {product.stock_qty !== null &&
+                          product.stock_qty !== undefined
+                            ? `Stock: ${product.stock_qty} ${product.unit || "pcs"}`
+                            : "No stock tracking"}
+                        </div>
+                      </div>
+                      <div className="text-green-600 font-medium">
+                        Rs. {product.price.toFixed(2)}
                       </div>
                     </div>
-                    <div className="text-green-600 font-medium">
-                      Rs. {product.price.toFixed(2)}
-                    </div>
-                  </div>
-                </button>
-              ))}
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -258,7 +316,7 @@ function NewOrderContent() {
           </h2>
           {items.length === 0 ? (
             <p className="text-gray-500 text-center py-8">
-              No items added yet. Search and click products to add them.
+              No items added yet. Search and click items to add them.
             </p>
           ) : (
             <div className="space-y-3">
@@ -278,7 +336,9 @@ function NewOrderContent() {
                   <div className="flex items-center gap-3">
                     <button
                       type="button"
-                      onClick={() => updateQuantity(item.product_id, item.quantity - 1)}
+                      onClick={() =>
+                        updateQuantity(item.product_id, item.quantity - 1)
+                      }
                       className="w-8 h-8 bg-gray-200 rounded-md hover:bg-gray-300"
                     >
                       -
@@ -288,7 +348,9 @@ function NewOrderContent() {
                     </span>
                     <button
                       type="button"
-                      onClick={() => updateQuantity(item.product_id, item.quantity + 1)}
+                      onClick={() =>
+                        updateQuantity(item.product_id, item.quantity + 1)
+                      }
                       className="w-8 h-8 bg-gray-200 rounded-md hover:bg-gray-300"
                     >
                       +
@@ -310,7 +372,9 @@ function NewOrderContent() {
               {/* Total */}
               <div className="pt-4 border-t border-gray-200">
                 <div className="flex justify-between items-center">
-                  <span className="text-lg font-semibold text-gray-900">Total</span>
+                  <span className="text-lg font-semibold text-gray-900">
+                    Total
+                  </span>
                   <span className="text-2xl font-bold text-green-600">
                     Rs. {totalAmount.toFixed(2)}
                   </span>
@@ -339,7 +403,9 @@ function NewOrderContent() {
             disabled={createOrderMutation.isPending}
             className="flex-1 px-6 py-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 text-lg font-medium"
           >
-            {createOrderMutation.isPending ? "Creating Order..." : "Create Order"}
+            {createOrderMutation.isPending
+              ? "Creating Order..."
+              : "Create Order"}
           </button>
         </div>
       </form>

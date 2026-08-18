@@ -16,7 +16,7 @@ interface CartItem {
   product_name: string;
   quantity: number;
   unit_price: number;
-  stock_qty: number;
+  stock_qty: number | null;
   barcode?: string | null;
 }
 
@@ -37,8 +37,7 @@ function POSContent() {
   const [paymentType, setPaymentType] = useState<"cash" | "credit">("cash");
   const [receipt, setReceipt] = useState<Receipt | null>(null);
   const [scanStatus, setScanStatus] = useState("");
-  
-  // Barcode detection refs
+
   const searchInputRef = useRef<HTMLInputElement>(null);
   const lastKeyTimeRef = useRef<number>(0);
   const barcodeBufferRef = useRef<string>("");
@@ -63,7 +62,7 @@ function POSContent() {
     queryKey: ["pos-customers", customerSearch],
     queryFn: async () => {
       const response = await api.get("/customers/", {
-        params: { search: customerSearch || undefined, limit:20 },
+        params: { search: customerSearch || undefined, limit: 20 },
       });
       return response.data as Customer[];
     },
@@ -80,26 +79,30 @@ function POSContent() {
       queryClient.invalidateQueries({ queryKey: ["orders"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       queryClient.invalidateQueries({ queryKey: ["customers"] });
-      
-      setToast({ 
-        message: paymentType === "credit" ? "Credit sale recorded!" : "Sale completed successfully!", 
-        type: "success" 
+
+      setToast({
+        message:
+          paymentType === "credit"
+            ? "Credit sale recorded!"
+            : "Sale completed successfully!",
+        type: "success",
       });
-      
+
       try {
         const receiptResponse = await api.get(`/orders/${data.id}/receipt`);
         setReceipt(receiptResponse.data);
       } catch (err) {
         console.error("Failed to fetch receipt:", err);
       }
-      
+
       setCart([]);
       setSelectedCustomer(null);
       setPaymentType("cash");
     },
     onError: (err: any) => {
       const detail = err.response?.data?.detail;
-      const message = typeof detail === "string" ? detail : "Failed to complete sale";
+      const message =
+        typeof detail === "string" ? detail : "Failed to complete sale";
       setToast({ message, type: "error" });
     },
   });
@@ -113,7 +116,12 @@ function POSContent() {
   }, [cart]);
 
   const hasOutOfStockItem = useMemo(() => {
-    return cart.some((item) => item.quantity > item.stock_qty);
+    return cart.some(
+      (item) =>
+        item.stock_qty !== null &&
+        item.stock_qty !== undefined &&
+        item.quantity > item.stock_qty
+    );
   }, [cart]);
 
   const selectedCustomerName = useMemo(() => {
@@ -121,17 +129,16 @@ function POSContent() {
   }, [customers, selectedCustomer]);
 
   // ============ BARCODE SCAN DETECTION ============
-  
+
   const handleBarcodeScan = async (barcode: string) => {
     if (!barcode.trim()) return;
-    
+
     setScanStatus("Looking up barcode...");
-    
+
     try {
       const response = await api.get(`/products/by-barcode/${barcode.trim()}`);
       const product = response.data as Product;
-      
-      // Add to cart
+
       addToCart(product);
       setScanStatus("");
       setSearch("");
@@ -139,9 +146,9 @@ function POSContent() {
     } catch (err: any) {
       if (err.response?.status === 404) {
         setScanStatus(`Product not found for barcode: ${barcode}`);
-        setToast({ 
-          message: `❌ No product found for barcode: ${barcode}`, 
-          type: "error" 
+        setToast({
+          message: `❌ No product found for barcode: ${barcode}`,
+          type: "error",
         });
       } else {
         setScanStatus("Error looking up barcode");
@@ -153,16 +160,13 @@ function POSContent() {
   const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     const now = Date.now();
     const timeSinceLastKey = now - lastKeyTimeRef.current;
-    
-    // If Enter is pressed
+
     if (e.key === "Enter") {
       const currentValue = (e.target as HTMLInputElement).value;
-      
-      // Check if this was a fast scan (keys arrived quickly)
+
       if (isScanningRef.current && currentValue.trim().length >= 5) {
         e.preventDefault();
         handleBarcodeScan(currentValue);
-        // Clear for next scan
         (e.target as HTMLInputElement).value = "";
         setSearch("");
         barcodeBufferRef.current = "";
@@ -171,22 +175,25 @@ function POSContent() {
       lastKeyTimeRef.current = now;
       return;
     }
-    
-    // Detect fast typing (barcode scanner)
+
     if (timeSinceLastKey < 50 && timeSinceLastKey > 0) {
       isScanningRef.current = true;
     } else if (timeSinceLastKey > 200) {
-      // Slow typing = manual search
       isScanningRef.current = false;
     }
-    
+
     lastKeyTimeRef.current = now;
   };
 
   // ============ END BARCODE DETECTION ============
 
   const addToCart = (product: Product) => {
-    if (product.stock_qty <= 0) {
+    // Only check stock if stock is tracked (not null)
+    if (
+      product.stock_qty !== null &&
+      product.stock_qty !== undefined &&
+      product.stock_qty <= 0
+    ) {
       setToast({ message: `${product.name} is out of stock`, type: "error" });
       return;
     }
@@ -197,7 +204,11 @@ function POSContent() {
       );
 
       if (existingItem) {
-        if (existingItem.quantity >= product.stock_qty) {
+        if (
+          product.stock_qty !== null &&
+          product.stock_qty !== undefined &&
+          existingItem.quantity >= product.stock_qty
+        ) {
           setToast({
             message: `Only ${product.stock_qty} ${product.name} in stock`,
             type: "error",
@@ -218,7 +229,7 @@ function POSContent() {
           product_name: product.name,
           quantity: 1,
           unit_price: product.price,
-          stock_qty: product.stock_qty,
+          stock_qty: product.stock_qty !== undefined ? product.stock_qty : null,
           barcode: product.barcode || null,
         },
       ];
@@ -232,7 +243,11 @@ function POSContent() {
           if (item.product_id === productId) {
             const newQty = item.quantity + delta;
             if (newQty <= 0) return null;
-            if (newQty > item.stock_qty) {
+            if (
+              item.stock_qty !== null &&
+              item.stock_qty !== undefined &&
+              newQty > item.stock_qty
+            ) {
               setToast({
                 message: `Only ${item.stock_qty} in stock`,
                 type: "error",
@@ -271,9 +286,9 @@ function POSContent() {
     }
 
     if (paymentType === "credit" && !selectedCustomer) {
-      setToast({ 
-        message: "Credit sale requires a customer. Please select a customer.", 
-        type: "error" 
+      setToast({
+        message: "Credit sale requires a customer. Please select a customer.",
+        type: "error",
       });
       return;
     }
@@ -338,7 +353,13 @@ function POSContent() {
               autoFocus
             />
             {scanStatus && (
-              <p className={`text-sm mt-2 ${scanStatus.includes("not found") || scanStatus.includes("Error") ? "text-red-600" : "text-blue-600"}`}>
+              <p
+                className={`text-sm mt-2 ${
+                  scanStatus.includes("not found") || scanStatus.includes("Error")
+                    ? "text-red-600"
+                    : "text-blue-600"
+                }`}
+              >
                 {scanStatus}
               </p>
             )}
@@ -358,12 +379,18 @@ function POSContent() {
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
                 {products?.map((product) => {
-                  const isOutOfStock = product.stock_qty <= 0;
+                  const isOutOfStock =
+                    product.stock_qty !== null &&
+                    product.stock_qty !== undefined &&
+                    product.stock_qty <= 0;
                   const cartItem = cart.find(
                     (item) => item.product_id === product.id
                   );
                   const isMaxedOut =
-                    cartItem && cartItem.quantity >= product.stock_qty;
+                    cartItem &&
+                    product.stock_qty !== null &&
+                    product.stock_qty !== undefined &&
+                    cartItem.quantity >= product.stock_qty;
 
                   return (
                     <button
@@ -396,14 +423,19 @@ function POSContent() {
                         className={`text-xs mt-1 ${
                           isOutOfStock
                             ? "text-red-600 font-semibold"
-                            : product.stock_qty <= 5
+                            : product.stock_qty !== null &&
+                              product.stock_qty !== undefined &&
+                              product.stock_qty <= 5
                             ? "text-red-600"
                             : "text-gray-500"
                         }`}
                       >
                         {isOutOfStock
                           ? "Out of Stock"
-                          : `Stock: ${product.stock_qty} ${product.unit || "pcs"}`}
+                          : product.stock_qty !== null &&
+                            product.stock_qty !== undefined
+                          ? `Stock: ${product.stock_qty} ${product.unit || "pcs"}`
+                          : "No stock tracking"}
                       </div>
                       {cartItem && (
                         <div className="absolute top-2 right-2 bg-blue-600 text-white text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center">
@@ -533,7 +565,8 @@ function POSContent() {
           {paymentType === "credit" && selectedCustomer && selectedCustomerName && (
             <div className="mx-4 my-3 p-3 bg-orange-50 border border-orange-200 rounded-md">
               <p className="text-sm text-orange-800">
-                📝 This sale of <strong>Rs. {totalAmount.toFixed(2)}</strong> will be added to{" "}
+                📝 This sale of{" "}
+                <strong>Rs. {totalAmount.toFixed(2)}</strong> will be added to{" "}
                 <strong>{selectedCustomerName}</strong>'s balance.
               </p>
             </div>

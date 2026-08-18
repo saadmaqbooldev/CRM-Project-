@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
+from sqlalchemy import or_, distinct
 from typing import List, Optional
 import pandas as pd
 import io
@@ -18,28 +18,33 @@ router = APIRouter(prefix="/products", tags=["products"])
 
 LOW_STOCK_THRESHOLD = 5
 
-def check_low_stock(stock_qty: int) -> bool:
+def check_low_stock(stock_qty: Optional[int]) -> bool:
+    """Check if product is low on stock. Returns False if stock not tracked."""
+    if stock_qty is None:
+        return False
     return stock_qty < LOW_STOCK_THRESHOLD
 
-@router.get("/by-barcode/{barcode}", response_model=ProductOut)
-def get_product_by_barcode(
-    barcode: str,
+# ============ CATEGORIES ENDPOINT ============
+
+@router.get("/categories")
+def get_categories(
     db: Session = Depends(get_db),
     current_business: Business = Depends(get_current_business)
 ):
-    """Get product by barcode for POS lookup"""
-    product = db.query(Product).filter(
-        Product.barcode == barcode,
-        Product.business_id == current_business.id
-    ).first()
+    """Get distinct categories used by this business"""
     
-    if not product:
-        raise HTTPException(status_code=404, detail="Product not found for this barcode")
+    categories = db.query(distinct(Product.category)).filter(
+        Product.business_id == current_business.id,
+        Product.category.isnot(None),
+        Product.category != ""
+    ).order_by(Product.category).all()
     
-    product_out = ProductOut.from_orm(product)
-    product_out.low_stock = check_low_stock(product.stock_qty)
+    # Flatten results
+    result = [cat[0] for cat in categories if cat[0]]
     
-    return product_out
+    return {"categories": result}
+
+# ============ IMPORT TEMPLATE ============
 
 @router.get("/import-template")
 def download_import_template():
@@ -61,8 +66,8 @@ def download_import_template():
     
     examples = [
         {'name': 'Panadol', 'category': 'Medicine', 'barcode': '8901234567890', 'price': 50.0, 'stock_qty': 100, 'unit': 'pcs'},
-        {'name': 'Cough Syrup', 'category': 'Medicine', 'barcode': '8901234567891', 'price': 150.0, 'stock_qty': 50, 'unit': 'bottle'},
-        {'name': 'Bandage', 'category': 'Medical Supplies', 'barcode': '8901234567892', 'price': 20.0, 'stock_qty': 200, 'unit': 'pcs'}
+        {'name': 'Cough Syrup', 'category': 'Medicine', 'barcode': '', 'price': 150.0, 'stock_qty': 50, 'unit': 'bottle'},
+        {'name': 'Consultation', 'category': 'Service', 'barcode': '', 'price': 500.0, 'stock_qty': '', 'unit': 'session'}
     ]
     
     for row_idx, example in enumerate(examples, 2):
@@ -80,13 +85,14 @@ def download_import_template():
         "Optional Columns:",
         "3. category - Product category",
         "4. barcode - Product barcode/scan code",
-        "5. stock_qty - Stock quantity (defaults to 0)",
+        "5. stock_qty - Stock quantity (leave empty if not tracking stock)",
         "6. unit - Unit of measurement",
         "",
         "Rules:",
         "- Column names are case-insensitive",
         "- Price must be greater than 0",
         "- Stock cannot be negative",
+        "- Leave stock_qty EMPTY for services/items without inventory tracking",
         "- Duplicate names are skipped"
     ]
     
@@ -112,6 +118,29 @@ def download_import_template():
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": "attachment; filename=product_import_template.xlsx"}
     )
+
+# ============ BY BARCODE ============
+
+@router.get("/by-barcode/{barcode}", response_model=ProductOut)
+def get_product_by_barcode(
+    barcode: str,
+    db: Session = Depends(get_db),
+    current_business: Business = Depends(get_current_business)
+):
+    product = db.query(Product).filter(
+        Product.barcode == barcode,
+        Product.business_id == current_business.id
+    ).first()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found for this barcode")
+    
+    product_out = ProductOut.from_orm(product)
+    product_out.low_stock = check_low_stock(product.stock_qty)
+    
+    return product_out
+
+# ============ IMPORT ============
 
 @router.post("/import", status_code=status.HTTP_200_OK)
 async def import_products(
@@ -168,11 +197,11 @@ async def import_products(
                     failed += 1
                     continue
                 
-                stock_raw = row.get('stock_qty', 0)
+                # stock_qty is optional — null means not tracked
+                stock_raw = row.get('stock_qty')
+                stock_qty = None
                 try:
-                    if pd.isna(stock_raw) or str(stock_raw).strip() == '':
-                        stock_qty = 0
-                    else:
+                    if pd.notna(stock_raw) and str(stock_raw).strip() != '':
                         stock_qty = int(float(stock_raw))
                         if stock_qty < 0:
                             errors.append({"row": row_num, "error": "Stock cannot be negative"})
@@ -236,6 +265,8 @@ async def import_products(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Import failed: {str(e)}")
 
+# ============ CREATE ============
+
 @router.post("/", response_model=ProductOut, status_code=status.HTTP_201_CREATED)
 def create_product(
     product_data: ProductCreate,
@@ -266,6 +297,8 @@ def create_product(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to create product: {str(e)}")
 
+# ============ LIST ============
+
 @router.get("/", response_model=List[ProductOut])
 def list_products(
     search: Optional[str] = Query(None),
@@ -280,13 +313,17 @@ def list_products(
     
     if search:
         search_term = f"%{search}%"
-        query = query.filter(or_(Product.name.ilike(search_term), Product.category.ilike(search_term), Product.barcode.ilike(search_term)))
+        query = query.filter(or_(
+            Product.name.ilike(search_term),
+            Product.category.ilike(search_term),
+            Product.barcode.ilike(search_term)
+        ))
     
     if category:
         query = query.filter(Product.category == category)
     
     if low_stock_only:
-        query = query.filter(Product.stock_qty < LOW_STOCK_THRESHOLD)
+        query = query.filter(Product.stock_qty.isnot(None), Product.stock_qty < LOW_STOCK_THRESHOLD)
     
     offset = (page - 1) * limit
     products = query.order_by(Product.created_at.desc()).offset(offset).limit(limit).all()
@@ -298,6 +335,8 @@ def list_products(
         result.append(product_out)
     
     return result
+
+# ============ GET ONE ============
 
 @router.get("/{product_id}", response_model=ProductOut)
 def get_product(
@@ -317,6 +356,8 @@ def get_product(
     product_out.low_stock = check_low_stock(product.stock_qty)
     
     return product_out
+
+# ============ UPDATE ============
 
 @router.put("/{product_id}", response_model=ProductOut)
 def update_product(
@@ -348,6 +389,8 @@ def update_product(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to update product: {str(e)}")
+
+# ============ DELETE ============
 
 @router.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_product(
