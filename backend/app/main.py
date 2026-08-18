@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.routers import auth, customers, products, orders, dashboard, reports
 
 app = FastAPI(
-    title="CRM System API",
+    title="Kova CRM API",
     description="Customer Relationship Management System for all businesses",
     version="1.0.0"
 )
@@ -11,7 +11,13 @@ app = FastAPI(
 # CORS Configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://kova-crm.vercel.app",  # Production Vercel URL
+        "https://kova-crm-git-main.vercel.app",  # Preview deployments
+        "https://*.vercel.app",  # All Vercel preview URLs
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -27,4 +33,8 @@ app.include_router(reports.router)
 
 @app.get("/")
 def health_check():
-    return {"status": "healthy", "message": "CRM API is running"}
+    return {
+        "status": "healthy",
+        "message": "Kova CRM API is running",
+        "version": "1.0.0"
+    }
